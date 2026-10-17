@@ -1,0 +1,17 @@
+# local settings (model, endpoint); the committed template is sts1/config.example.json
+sts1/config.json
+
+# game logs written by llm.py
+runs/
+
+# build output and the portable compiler (~900 MB), both rebuilt by build.ps1
+sts_lightspeed/build/
+tools/
+
+__pycache__/
+
+# datasets written by collect.py (regenerate with it)
+data/
+
+# third-party papers and code kept for reading, not ours to publish
+support resourses/

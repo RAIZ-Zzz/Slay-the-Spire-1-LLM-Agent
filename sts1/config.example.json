@@ -1,0 +1,46 @@
+{
+  "paths": {
+    "_comment": "relative to the project root (the folder that holds sts1/)",
+    "sim_build_dir": "sts_lightspeed/build",
+    "log_dir": "runs"
+  },
+  "fight": {
+    "_comment": "defaults for new_game / new_battle; encounter is any name in slaythespire.MonsterEncounter",
+    "seed": 1234,
+    "ascension": 0,
+    "encounter": "JAW_WORM"
+  },
+  "mcts": {
+    "_comment": "built-in MCTS (teacher and baseline): simulations per decision",
+    "simulations": 1000
+  },
+  "llm": {
+    "_comment": "any OpenAI-compatible endpoint, e.g. https://api.openai.com/v1, https://api.deepseek.com/v1, https://dashscope.aliyuncs.com/compatible-mode/v1, http://localhost:11434/v1 (Ollama). model \"random\" = dry run, calls nothing. The key: api_key, or else the environment variable named in api_key_env. config.json is git-ignored; never put a key in config.example.json. extra_body: extra request fields for this provider, e.g. {\"thinking\": {\"type\": \"disabled\"}} stops DeepSeek-style models from thinking ~2000 tokens before every answer.",
+    "base_url": "",
+    "model": "random",
+    "api_key": "",
+    "api_key_env": "LLM_API_KEY",
+    "temperature": 0.0,
+    "max_tokens": 512,
+    "timeout": 120,
+    "retries": 2,
+    "extra_body": {}
+  },
+  "play": {
+    "_comment": "what llm.py plays: mode \"battle\" = one fight, \"game\" = a whole run; games use seeds seed, seed+1, ...",
+    "mode": "battle",
+    "games": 3,
+    "max_steps": 3000
+  },
+  "collect": {
+    "_comment": "collect.py: MCTS plays `games` fights of fight.encounter from seed_start; split train:val:test by seed (never by step)",
+    "games": 10000,
+    "seed_start": 1,
+    "split": [
+      6,
+      2,
+      2
+    ],
+    "out_dir": "data"
+  }
+}
