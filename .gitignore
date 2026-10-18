@@ -6,6 +6,7 @@
 
 # build output and the portable compiler (~900 MB), both rebuilt by build.ps1
 /sts_lightspeed/build/
+/sts_lightspeed/build-debug/
 /tools/
 
 __pycache__/
