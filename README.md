@@ -31,7 +31,8 @@ Earlier work on Slay the Spire 2 (LLM through a game mod, then a DQN):
 ## Layout
 
 ```
-build.ps1            build the simulator + Python module
+build.ps1            build the simulator + Python module (Windows)
+build.sh             the same on Linux (e.g. a GPU cluster)
 sts_lightspeed/      the simulator (vendored, see below)
 sts1/config.json     all settings (not in git; copy config.example.json to start)
 sts1/tools.py        render_state / legal_actions / act / simulate / mcts_advice
@@ -53,6 +54,16 @@ python sts1/collect.py          # generate SFT data
 python sts1/llm.py              # let the model in config.json play; "random" = dry run
 ```
 
+## Use (Linux)
+
+Needs cmake >= 3.19 and g++ with C++17. Same commands after the build:
+
+```
+PY=$(which python) ./build.sh   # or "./build.sh debug" for a UBSan build in build-debug/
+cp sts1/config.example.json sts1/config.json
+python sts1/test_tools.py quick
+```
+
 ## The vendored simulator
 
 `sts_lightspeed/` is [gamerpuppy/sts_lightspeed](https://github.com/gamerpuppy/sts_lightspeed)
@@ -62,6 +73,8 @@ Our changes:
 
 - `bindings/battle.cpp`, `bindings/game.cpp`: new step-by-step bindings
 - `src/game/GameContext.cpp`: five lambdas captured `this`, so a copied run wrote into the original
+- `src/combat/BattleContext.cpp`: `player.cc` (character class) was never set, so in-combat
+  random cards/potions indexed tables with garbage; harmless by luck on Windows, hangs on Linux
 - `CMakeLists.txt`, `bindings/slaythespire.cpp`: register the new bindings
 
 Simulator issues worked around in the bindings rather than patched: potion actions
