@@ -3,6 +3,8 @@
 # From the repo root on TC2:
 #   mkdir -p runs && SMOKE=1 sbatch sts1/sft.sbatch   # trial: 20 steps, 200 validation examples -> runs/sft-smoke
 #   mkdir -p runs && sbatch sts1/sft.sbatch           # full run -> runs/sft; resubmit to resume after the 6 h limit
+#   sbatch sts1/sft.sbatch eval runs/sft-smoke/final 500   # action accuracy, LoRA adapter, first 500 val records
+#   sbatch sts1/sft.sbatch eval none 500                   # same without LoRA (zero-shot Qwen)
 # Log: runs/sts1-sft-<jobid>.out   Queue: squeue -u $USER   Cancel: scancel <jobid>
 #SBATCH --partition=MGPU-TC2
 #SBATCH --qos=normal
@@ -18,7 +20,9 @@ export HF_HOME=~/.cache/huggingface HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 TRANSFOR
 PY=~/.conda/envs/gpu-env/bin/python
 nvidia-smi --query-gpu=name,memory.total --format=csv
 
-if [ -n "$SMOKE" ]; then
+if [ "$1" = eval ]; then
+  $PY sts1/sft.py "$@"
+elif [ -n "$SMOKE" ]; then
   # same train() with a few settings overridden, so sft.py itself stays the real configuration
   $PY - <<'EOF'
 import sys, trl

@@ -5,6 +5,9 @@ simulator and config.json, which training does not.
 
     HF_HUB_OFFLINE=1 python sts1/sft.py show     # print one formatted example + token count
     HF_HUB_OFFLINE=1 python sts1/sft.py train    # fine-tune, checkpoints in OUTPUT_DIR
+    HF_HUB_OFFLINE=1 python sts1/sft.py eval [ADAPTER_DIR|none] [N]
+                                                 # action accuracy on the first N validation
+                                                 # records (all if N is missing); "none" = no LoRA
 
 Pipeline follows the HF LLM Course, chapter 11 "Supervised Fine-Tuning"
 (https://huggingface.co/learn/llm-course/chapter11/3): prepare the dataset, apply the
@@ -12,7 +15,10 @@ chat template, configure training, monitor train/validation loss.
 """
 from __future__ import annotations
 from datasets import DatasetDict, load_dataset
+import json
+import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent   # the folder that holds sts1/, same as tools.ROOT
@@ -143,10 +149,96 @@ def train(dataset) -> None:
     trainer.save_model(str(OUTPUT_DIR / "final"))   # PEFT Integration "Saving": the LoRA adapter only
 
 
+# --- evaluation ----------------------------------------------------------------
+
+_VALUE = r"(\[[\d,\s]*\]|-?\d+)"   # same patterns as llm.parse_action (llm.py cannot be imported on TC2)
+
+
+def parse_answer(reply: str):
+    """The action in a reply - the last 'ANSWER: ...', or a reply that is only a number/list - else None."""
+    answers = re.findall(r"ANSWER:\s*" + _VALUE, reply, re.I)
+    if answers:
+        value = answers[-1]
+    elif re.fullmatch(r"\s*" + _VALUE + r"\s*", reply):
+        value = reply.strip()
+    else:
+        return None
+    return json.loads(value)
+
+
+def summarize(rows: list[dict]) -> None:
+    """Accuracy of the model and of "always answer 0", by group. A row: best, answer, forced, in_train."""
+    groups = {
+        "all": rows,
+        "not forced": [r for r in rows if not r["forced"]],
+        "not forced, prompt seen in train": [r for r in rows if not r["forced"] and r["in_train"]],
+        "not forced, prompt unseen": [r for r in rows if not r["forced"] and not r["in_train"]],
+    }
+    print(f"{'group':34s} {'n':>6s} {'model':>7s} {'always 0':>9s} {'no answer':>10s}")
+    for name, group in groups.items():
+        if group:
+            n = len(group)
+            model = sum(r["answer"] == r["best"] for r in group) / n
+            zero = sum(r["best"] == 0 for r in group) / n
+            invalid = sum(r["answer"] is None for r in group)
+            print(f"{name:34s} {n:6d} {model:7.1%} {zero:9.1%} {invalid:10d}")
+
+
+def evaluate(adapter: str | None, limit: int | None, batch_size: int = 32) -> None:
+    """Let the model answer validation records and compare with the MCTS choice.
+
+    Sources: loading base model + adapter - TRL PEFT Integration "Loading"; padding_side="left",
+    greedy decoding, set max_new_tokens, keep only the new tokens - HF "Text generation" guide
+    (https://huggingface.co/docs/transformers/main/en/llm_tutorial), Pitfalls; prompt with
+    add_generation_prompt=True - Qwen3-4B-Instruct-2507 model card. batch_size and max_new_tokens=16
+    (the answer is ~6 tokens) have no source.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, padding_side="left")
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.bfloat16, device_map="auto")
+    if adapter:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, adapter)
+    model.eval()
+
+    records = load_splits()["validation"]   # raw records: still have best / forced / in_train
+    if limit:
+        records = records.select(range(min(limit, len(records))))
+    print(f"model {MODEL_NAME} + {adapter or 'no adapter'} | {len(records)} validation records")
+
+    rows, started = [], time.time()
+    for start in range(0, len(records), batch_size):
+        batch = records.select(range(start, min(start + batch_size, len(records))))
+        texts = [tokenizer.apply_chat_template(to_prompt_completion(r)["prompt"], tokenize=False,
+                                               add_generation_prompt=True) for r in batch]
+        inputs = tokenizer(texts, padding=True, add_special_tokens=False, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            # do_sample=False explicitly: Qwen ships a generation_config that may turn sampling on
+            output = model.generate(**inputs, max_new_tokens=16, do_sample=False)
+        replies = tokenizer.batch_decode(output[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        for record, reply in zip(batch, replies):
+            rows.append({"best": record["best"], "answer": parse_answer(reply), "reply": reply,
+                         "forced": record["forced"], "in_train": record["in_train"]})
+        if start == 0:
+            for row in rows[:3]:
+                print(f"  reply {row['reply']!r} -> {row['answer']} | MCTS {row['best']}")
+        if (start // batch_size) % 20 == 0:
+            done = len(rows)
+            print(f"  {done}/{len(records)} done, {(time.time() - started) / done:.3f} s per record", flush=True)
+    summarize(rows)
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "show"
-    if command not in ("show", "train"):
-        raise SystemExit(f"unknown command {command!r}: use show or train")
+    if command not in ("show", "train", "eval"):
+        raise SystemExit(f"unknown command {command!r}: use show, train or eval")
+    if command == "eval":
+        adapter = sys.argv[2] if len(sys.argv) > 2 else str(OUTPUT_DIR / "final")
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
+        evaluate(None if adapter == "none" else adapter, limit)
+        return
     dataset = build_dataset()
     if command == "show":
         from transformers import AutoTokenizer
