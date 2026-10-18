@@ -5,9 +5,11 @@ simulator and config.json, which training does not.
 
     HF_HUB_OFFLINE=1 python sts1/sft.py show     # print one formatted example + token count
     HF_HUB_OFFLINE=1 python sts1/sft.py train    # fine-tune, checkpoints in OUTPUT_DIR
-    HF_HUB_OFFLINE=1 python sts1/sft.py eval [ADAPTER_DIR|none] [N]
+    HF_HUB_OFFLINE=1 python sts1/sft.py eval [ADAPTER_DIR|none] [N] [MAX_NEW_TOKENS]
                                                  # action accuracy on the first N validation
-                                                 # records (all if N is missing); "none" = no LoRA
+                                                 # records (all if N is 0 or missing); "none" = no LoRA;
+                                                 # MAX_NEW_TOKENS default 16, use 512 (llm.py's
+                                                 # max_tokens) for the untrained model, which reasons first
 
 Pipeline follows the HF LLM Course, chapter 11 "Supervised Fine-Tuning"
 (https://huggingface.co/learn/llm-course/chapter11/3): prepare the dataset, apply the
@@ -184,7 +186,7 @@ def summarize(rows: list[dict]) -> None:
             print(f"{name:34s} {n:6d} {model:7.1%} {zero:9.1%} {invalid:10d}")
 
 
-def evaluate(adapter: str | None, limit: int | None, batch_size: int = 32) -> None:
+def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, batch_size: int = 32) -> None:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -208,7 +210,7 @@ def evaluate(adapter: str | None, limit: int | None, batch_size: int = 32) -> No
         inputs = tokenizer(texts, padding=True, add_special_tokens=False, return_tensors="pt").to(model.device)
         with torch.no_grad():
             # do_sample=False explicitly: Qwen ships a generation_config that may turn sampling on
-            output = model.generate(**inputs, max_new_tokens=16, do_sample=False)
+            output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         replies = tokenizer.batch_decode(output[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         for record, reply in zip(batch, replies):
             rows.append({"best": record["best"], "answer": parse_answer(reply), "reply": reply,
@@ -229,7 +231,8 @@ def main():
     if command == "eval":
         adapter = sys.argv[2] if len(sys.argv) > 2 else str(OUTPUT_DIR / "final")
         limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
-        evaluate(None if adapter == "none" else adapter, limit)
+        max_new_tokens = int(sys.argv[4]) if len(sys.argv) > 4 else 16
+        evaluate(None if adapter == "none" else adapter, limit, max_new_tokens)
         return
     dataset = build_dataset()
     if command == "show":
