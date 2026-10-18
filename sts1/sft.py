@@ -185,14 +185,6 @@ def summarize(rows: list[dict]) -> None:
 
 
 def evaluate(adapter: str | None, limit: int | None, batch_size: int = 32) -> None:
-    """Let the model answer validation records and compare with the MCTS choice.
-
-    Sources: loading base model + adapter - TRL PEFT Integration "Loading"; padding_side="left",
-    greedy decoding, set max_new_tokens, keep only the new tokens - HF "Text generation" guide
-    (https://huggingface.co/docs/transformers/main/en/llm_tutorial), Pitfalls; prompt with
-    add_generation_prompt=True - Qwen3-4B-Instruct-2507 model card. batch_size and max_new_tokens=16
-    (the answer is ~6 tokens) have no source.
-    """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
