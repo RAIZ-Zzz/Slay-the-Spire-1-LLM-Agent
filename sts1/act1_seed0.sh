@@ -6,11 +6,12 @@
 set -e
 cd "$(dirname "$0")/.."
 PY=~/.conda/envs/gpu-env/bin/python
-export HF_HUB_OFFLINE=1 TRANSFORMERS_VERBOSITY=error
+export HF_HUB_OFFLINE=1 TRANSFORMERS_VERBOSITY=error PYTHONUNBUFFERED=1   # unbuffered: progress shows through tee
 JOBS_FILE=runs/act1_seed0.jobs
 mkdir -p runs
 
 if [ "$1" = results ]; then
+  [ -f "$JOBS_FILE" ] || { echo "no jobs queued yet: run  bash sts1/act1_seed0.sh  first"; exit 1; }
   read -r TRAIN EVAL PLAY < "$JOBS_FILE"
   squeue -u "$USER" -h -o "%i %T" | grep -E "^($TRAIN|$EVAL|$PLAY) " && echo "(still queued or running)" || true
   echo "== train ($TRAIN)"
