@@ -24,7 +24,7 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 if [ "$1" = eval ]; then
   $PY sts1/sft.py "$@"
 elif [ "$1" = play ]; then
-  $PY sts1/llm.py
+  $PY -X faulthandler sts1/llm.py   # faulthandler: on a segfault, print the Python line it died in
 elif [ -n "$SMOKE" ]; then
   # same train() with a few settings overridden, so sft.py itself stays the real configuration
   $PY - <<'EOF'
