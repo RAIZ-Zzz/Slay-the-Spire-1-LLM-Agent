@@ -5,6 +5,7 @@
 #   mkdir -p runs && sbatch sts1/sft.sbatch           # full run -> runs/sft; resubmit to resume after the 6 h limit
 #   sbatch sts1/sft.sbatch eval runs/sft-smoke/final 500   # action accuracy, LoRA adapter, first 500 val records
 #   sbatch sts1/sft.sbatch eval none 500                   # same without LoRA (zero-shot Qwen)
+#   sbatch sts1/sft.sbatch play                            # sts1/llm.py: the model in sts1/config.json plays
 # Log: runs/sts1-sft-<jobid>.out   Queue: squeue -u $USER   Cancel: scancel <jobid>
 #SBATCH --partition=MGPU-TC2
 #SBATCH --qos=normal
@@ -22,6 +23,8 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 
 if [ "$1" = eval ]; then
   $PY sts1/sft.py "$@"
+elif [ "$1" = play ]; then
+  $PY sts1/llm.py
 elif [ -n "$SMOKE" ]; then
   # same train() with a few settings overridden, so sft.py itself stays the real configuration
   $PY - <<'EOF'

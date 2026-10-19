@@ -15,9 +15,10 @@
     "simulations": 1000
   },
   "llm": {
-    "_comment": "any OpenAI-compatible endpoint, e.g. https://api.openai.com/v1, https://api.deepseek.com/v1, https://dashscope.aliyuncs.com/compatible-mode/v1, http://localhost:11434/v1 (Ollama). model \"random\" = dry run, calls nothing. The key: api_key, or else the environment variable named in api_key_env. config.json is git-ignored; never put a key in config.example.json. extra_body: extra request fields for this provider, e.g. {\"thinking\": {\"type\": \"disabled\"}} stops DeepSeek-style models from thinking ~2000 tokens before every answer.",
+    "_comment": "any OpenAI-compatible endpoint, e.g. https://api.openai.com/v1, https://api.deepseek.com/v1, https://dashscope.aliyuncs.com/compatible-mode/v1, http://localhost:11434/v1 (Ollama). model \"random\" = dry run, calls nothing. Empty base_url = run model locally with transformers (GPU), e.g. model \"Qwen/Qwen3-4B-Instruct-2507\" with adapter \"runs/sft/final\" (relative to the project root; \"\" = no LoRA). The key: api_key, or else the environment variable named in api_key_env. config.json is git-ignored; never put a key in config.example.json. extra_body: extra request fields for this provider, e.g. {\"thinking\": {\"type\": \"disabled\"}} stops DeepSeek-style models from thinking ~2000 tokens before every answer.",
     "base_url": "",
     "model": "random",
+    "adapter": "",
     "api_key": "",
     "api_key_env": "LLM_API_KEY",
     "temperature": 0.0,

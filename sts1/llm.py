@@ -1,7 +1,9 @@
 """Let a model play: show it render_state, read back an action, act, repeat.
 
 Settings come from config.json ("llm" and "play"). With model "random" it plays
-random legal actions and calls nothing, which checks the loop end to end.
+random legal actions and calls nothing, which checks the loop end to end. With an
+empty base_url the model runs locally through transformers (a GPU machine such as
+TC2), optionally with the LoRA adapter in llm.adapter, e.g. "runs/sft/final".
 
     python sts1/llm.py
 
@@ -34,6 +36,37 @@ def build_prompt(last: str, game: tools.Game) -> str:
     """The user message for one decision. collect.py uses it too, so training
     prompts match what the model sees when it plays."""
     return f"Last action: {last}\n\n{tools.render_state(game)}"
+
+
+_local = None   # (tokenizer, model), loaded on the first local call
+
+
+def ask_local(prompt: str) -> str:
+    """One reply from the model in llm.model run with transformers, plus llm.adapter if set.
+
+    Sources: load + apply_chat_template(add_generation_prompt=True) + decode only the new tokens -
+    Qwen3-4B-Instruct-2507 model card Quickstart; base model + adapter - TRL PEFT Integration
+    "Loading"; greedy when temperature is 0 - HF "Text generation" guide, Pitfalls. Same steps as
+    sft.evaluate, so play and the accuracy evaluation see the same prompt.
+    """
+    global _local
+    import torch
+    if _local is None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(LLM["model"])
+        model = AutoModelForCausalLM.from_pretrained(LLM["model"], dtype=torch.bfloat16, device_map="auto")
+        if LLM.get("adapter"):
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, str(tools.ROOT / LLM["adapter"]))
+        _local = tokenizer, model.eval()
+    tokenizer, model = _local
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer([text], add_special_tokens=False, return_tensors="pt").to(model.device)
+    sampling = {"do_sample": True, "temperature": LLM["temperature"]} if LLM["temperature"] > 0 else {"do_sample": False}
+    with torch.no_grad():
+        output = model.generate(**inputs, max_new_tokens=LLM["max_tokens"], **sampling)
+    return tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
 
 def ask_model(prompt: str) -> str:
@@ -96,7 +129,7 @@ def choose(game: tools.Game, prompt: str, rng: random.Random) -> tuple[tools.Act
         else:
             action = rng.randrange(len(tools.legal_actions(game)))
         return action, json.dumps(action)
-    reply = ask_model(prompt)
+    reply = ask_model(prompt) if LLM["base_url"] else ask_local(prompt)
     return parse_action(reply), reply
 
 
@@ -142,6 +175,7 @@ def main():
     log_dir.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     print(f"model {LLM['model']} | {PLAY['mode']} | {PLAY['games']} games from seed {fight['seed']}")
+    hp_left, wins, invalid = [], 0, 0   # single fights: HP left, 0 unless won (lost, stuck, too long)
     for i in range(PLAY["games"]):
         seed = fight["seed"] + i
         game = (tools.new_game(seed, fight["ascension"]) if PLAY["mode"] == "game"
@@ -156,7 +190,15 @@ def main():
             s = tools.sts.game_state(game.gc)
             where = f"act {s['act']} floor {s['floor']} hp {s['hp']}/{s['max_hp']}"
         print(f"seed {seed}: {counts['stopped'] or game.outcome:15s} {where} | {counts['steps']} actions, "
-              f"{counts['invalid']} invalid answers | {time.time() - started:.1f}s | {path.name}")
+              f"{counts['invalid']} invalid answers | {time.time() - started:.1f}s | {path.name}", flush=True)
+        won = game.outcome == "PLAYER_VICTORY"
+        wins += won
+        invalid += counts["invalid"]
+        if game.bc is not None:
+            hp_left.append(game.bc.state()["player"]["hp"] if won else 0)
+    if hp_left:
+        print(f"summary: {len(hp_left)} fights, win rate {wins / len(hp_left):.1%}, "
+              f"mean HP left {sum(hp_left) / len(hp_left):.2f} (0 unless won), {invalid} invalid answers")
 
 
 if __name__ == "__main__":
