@@ -28,8 +28,9 @@ ROOT = Path(__file__).resolve().parent.parent   # the folder that holds sts1/, s
 # --- settings ------------------------------------------------------------------
 
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"   # user's choice, 10-18; already in the TC2 HF cache
-DATA_DIR = ROOT / "data" / "jaw_worm"         # train.jsonl / val.jsonl / test.jsonl from collect.py
-OUTPUT_DIR = ROOT / "runs" / "sft"
+DATA = "act1_seed0"   # data/<DATA>/ from collect.py; was "jaw_worm" (that adapter is in runs/sft)
+DATA_DIR = ROOT / "data" / DATA                # train.jsonl / val.jsonl / test.jsonl
+OUTPUT_DIR = ROOT / "runs" / f"sft-{DATA}"
 
 # Copy of llm.SYSTEM_PROMPT (user's choice, 10-18). Training and play must send the same
 # text (HF chat templating guide, "Model training"), so change both together.

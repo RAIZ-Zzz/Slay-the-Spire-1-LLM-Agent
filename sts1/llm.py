@@ -141,17 +141,25 @@ def choose(game: tools.Game, prompt: str, rng: random.Random) -> tuple[tools.Act
     return parse_action(reply), reply
 
 
-def play(game: tools.Game, log, rng: random.Random) -> dict:
+def play(game: tools.Game, log, rng: random.Random, act1: bool = False) -> dict:
     """Play one game to the end. Returns counts for the summary line.
 
-    A game ends early as STUCK when the model gives no legal action after all
+    act1: the model plays only the fights; sts_lightspeed's rules (tools.rule_action, drawing
+    from rng) take every step outside them, forced ones included, exactly as collect.py does,
+    so the same rule seed gives the same run while the model plays like MCTS. Stops when act 1
+    is over. A game ends early as STUCK when the model gives no legal action after all
     retries, or as TOO_LONG at play.max_steps; the next game still runs.
     """
     steps = invalid = 0
     last = "nothing yet"
-    while game.outcome == "UNDECIDED":
+    while game.outcome == "UNDECIDED" and not (act1 and tools.sts.game_state(game.gc)["act"] > 1):
         if steps >= PLAY["max_steps"]:
             return {"steps": steps, "invalid": invalid, "stopped": "TOO_LONG"}
+        if act1 and game.bc is None:
+            last = tools.act(game, tools.rule_action(game, rng))
+            log.write(json.dumps({"step": steps, "rules": True, "result": last}) + "\n")
+            steps += 1
+            continue
         if game.bc is None or not tools._is_multi(game.bc.state()):
             if len(tools.legal_actions(game)) == 1:   # forced move: nothing to ask
                 last = tools.act(game, 0)
@@ -182,28 +190,44 @@ def main():
     log_dir = tools.ROOT / CONFIG["paths"]["log_dir"]
     log_dir.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    print(f"model {LLM['model']} | {PLAY['mode']} | {PLAY['games']} games from seed {fight['seed']}")
+    act1 = PLAY["mode"] == "act1"   # seeds below are then rule seeds of run play.run_seed
+    print(f"model {LLM['model']} | {PLAY['mode']} | {PLAY['games']} games from seed {fight['seed']}"
+          + (f" (rule seeds of run {PLAY['run_seed']})" if act1 else ""))
     hp_left, wins, invalid = [], 0, 0   # single fights: HP left, 0 unless won (lost, stuck, too long)
+    floors, cleared = [], 0             # act1: floor reached, act 1 boss beaten
     for i in range(PLAY["games"]):
         seed = fight["seed"] + i
-        game = (tools.new_game(seed, fight["ascension"]) if PLAY["mode"] == "game"
-                else tools.new_battle(fight["encounter"], seed, fight["ascension"]))
+        if act1:
+            game = tools.new_game(PLAY["run_seed"], fight["ascension"])
+        elif PLAY["mode"] == "game":
+            game = tools.new_game(seed, fight["ascension"])
+        else:
+            game = tools.new_battle(fight["encounter"], seed, fight["ascension"])
         path = log_dir / f"{stamp}-{PLAY['mode']}-seed{seed}.jsonl"
         started = time.time()
         with open(path, "w", encoding="utf-8") as log:
-            counts = play(game, log, random.Random(seed))
-        if game.bc is not None:   # a single fight: report the fight
+            counts = play(game, log, random.Random(seed), act1)
+        outcome = counts["stopped"] or game.outcome
+        if act1:
+            s = tools.sts.game_state(game.gc)
+            floors.append(s["floor"])
+            cleared += s["act"] > 1
+            outcome = "ACT1_CLEARED" if s["act"] > 1 else outcome
+        if game.bc is not None and game.single_fight:   # a single fight: report the fight
             where = f"hp {game.bc.state()['player']['hp']}/{game.bc.state()['player']['max_hp']}"
         else:
             s = tools.sts.game_state(game.gc)
             where = f"act {s['act']} floor {s['floor']} hp {s['hp']}/{s['max_hp']}"
-        print(f"seed {seed}: {counts['stopped'] or game.outcome:15s} {where} | {counts['steps']} actions, "
+        print(f"seed {seed}: {outcome:15s} {where} | {counts['steps']} actions, "
               f"{counts['invalid']} invalid answers | {time.time() - started:.1f}s | {path.name}", flush=True)
         won = game.outcome == "PLAYER_VICTORY"
         wins += won
         invalid += counts["invalid"]
-        if game.bc is not None:
+        if game.bc is not None and game.single_fight:
             hp_left.append(game.bc.state()["player"]["hp"] if won else 0)
+    if floors:
+        print(f"summary: {len(floors)} act-1 runs, act 1 boss beaten {cleared}/{len(floors)}, "
+              f"mean floor reached {sum(floors) / len(floors):.1f}, {invalid} invalid answers")
     if hp_left:
         print(f"summary: {len(hp_left)} fights, win rate {wins / len(hp_left):.1%}, "
               f"mean HP left {sum(hp_left) / len(hp_left):.2f} (0 unless won), {invalid} invalid answers")

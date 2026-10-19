@@ -1,4 +1,4 @@
-﻿"""Tool functions: everything a player (or an LLM) can see and do in Slay the Spire.
+"""Tool functions: everything a player (or an LLM) can see and do in Slay the Spire.
 
 Plain Python over the sts_lightspeed simulator. No prompt, model or training code
 lives here - that is the LLM side, written separately.
@@ -180,6 +180,21 @@ def mcts_advice(game: Game, simulations: int = CONFIG["mcts"]["simulations"]) ->
     rows = [(position[r["action"]], r["visits"], r["mean_value"])
             for r in game.bc.mcts(simulations) if r["action"] in position]
     return sorted(rows, key=lambda r: -r[1])
+
+
+def rule_action(game: Game, rng) -> int:
+    """The action number sts_lightspeed's own out-of-combat rules pick here
+    (ScumSearchAgent2::stepOutOfCombatPolicy: card rewards by ExpertKnowledge weights,
+    boss relics by a fixed ordering, rest site by HP, random map path). Outside fights only.
+    Like mcts_advice, a stand-in for decisions the model does not make yet, not a model tool.
+    """
+    if game.bc is not None or game.outcome != "UNDECIDED":
+        raise ValueError("the rules only decide outside fights in an ongoing run")
+    bits = sts.rule_action(game.gc, rng.getrandbits(32))
+    for i, (b, _) in enumerate(_run_options(game, sts.game_state(game.gc))):
+        if b == bits:
+            return i
+    raise RuntimeError(f"rule action {bits:#x} is not among the legal actions")
 
 
 # --- helpers: shared -----------------------------------------------------------
@@ -539,7 +554,9 @@ def _reward_label(s: dict, a: dict) -> str:
     if a["type"] == "CARD":
         which = f" (card reward {i + 1})" if len(info["cards"]) > 1 else ""
         if a["idx2"] == 5:
-            return f"skip the card{which}: +2 max HP (Singing Bowl)"
+            if any(name == "Singing Bowl" for name, _ in s["relics"]):
+                return f"skip the card{which}: +2 max HP (Singing Bowl)"
+            return f"skip the card{which}"
         return f"take card {_card(info['cards'][i][a['idx2']])}{which}"
     if a["type"] == "RELIC":
         lose_key = info["sapphire_key"] and i == len(info["relics"]) - 1

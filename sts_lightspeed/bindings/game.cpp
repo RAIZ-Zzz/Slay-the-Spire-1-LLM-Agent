@@ -15,6 +15,7 @@
 #include "game/GameContext.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/GameAction.h"
+#include "sim/search/ScumSearchAgent2.h"
 
 namespace py = pybind11;
 using namespace sts;
@@ -212,6 +213,24 @@ void def_game(py::module &m) {
         return c;
     }, py::arg("gc"), "independent copy of a run");
 
+    m.def("rule_action", [](const GameContext &gc, std::uint32_t seed) {
+        if (gc.screenState == ScreenState::BATTLE || gc.outcome != GameOutcome::UNDECIDED) {
+            throw std::invalid_argument("the rule policy only decides outside fights in an ongoing run");
+        }
+        // run the policy on a copy and keep only its first action
+        GameContext c(gc);
+        c.map = std::make_shared<Map>(*gc.map);
+        search::ScumSearchAgent2 agent;
+        agent.rng.seed(seed);
+        agent.stepOutOfCombatPolicy(c);
+        if (agent.gameActionHistory.empty()) {
+            throw std::runtime_error("the rule policy took no action");
+        }
+        return static_cast<std::uint32_t>(agent.gameActionHistory.front());
+    }, py::arg("gc"), py::arg("seed"),
+       "the action ScumSearchAgent2's out-of-combat policy takes here (cards by ExpertKnowledge weights, "
+       "random map path); seed drives its random choices");
+
     m.def("game_state", [](const GameContext &gc) {
         py::dict d;
         d["screen"] = screenName(gc.screenState);
@@ -245,8 +264,9 @@ void def_game(py::module &m) {
         for (const auto &a : GameAction::getAllActionsInState(gc)) {
             out.push_back(a.bits);
         }
-        // Singing Bowl: +2 max HP instead of a card. Valid (GameAction.cpp:190) but not listed.
-        if (gc.screenState == ScreenState::REWARDS && gc.hasRelic(RelicId::SINGING_BOWL)) {
+        // Skip one card reward (+2 max HP with Singing Bowl), keeping the other rewards.
+        // Valid (GameAction.cpp:190) but not listed by getAllActionsInState.
+        if (gc.screenState == ScreenState::REWARDS) {
             for (int i = 0; i < gc.info.rewardsContainer.cardRewardCount; ++i) {
                 out.push_back(GameAction(GameAction::RewardsActionType::CARD, i, 5).bits);
             }

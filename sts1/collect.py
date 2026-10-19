@@ -4,15 +4,20 @@ Settings come from config.json ("collect", plus "fight" and "mcts"). Games are
 split by seed, never by step - steps of one game are near copies of each other,
 so splitting a game across sets would leak answers into validation and test.
 
+collect.mode "fight": one fight of fight.encounter per seed (seeds seed_start, ...).
+collect.mode "act1": act 1 of the run collect.run_seed, once per rule seed (seed_start, ...):
+MCTS plays every fight, sts_lightspeed's rules (tools.rule_action) everything else, until
+the act 1 boss is beaten or the run dies. Only fight decisions become records.
+
     python sts1/collect.py
 
-Writes <out_dir>/<encounter>/{train,val,test}.jsonl and meta.json. One record:
+Writes <out_dir>/<encounter or act1_seed<run_seed>>/{train,val,test}.jsonl and meta.json. One record:
     seed, step       which game and which decision in it
     prompt           exactly what llm.py sends the model (build_prompt)
     actions          the legal actions, in order; the answer is a position here
     best             the action MCTS played (most visits)
     visits, values   per action: MCTS visit count and mean value
-    game_outcome, game_hp   how that game ended
+    game_outcome, game_hp   how that game ended (act1: ACT1_CLEARED or PLAYER_LOSS, and floor)
     forced           only one legal action: nothing to learn (llm.py does not ask the model)
     in_train         val/test only: the same prompt also occurs in train. Jaw Worm with the
                      starter deck has few distinct states (10 cards -> 1260 shuffles, 5 hp
@@ -26,30 +31,36 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import random
 import time
 
 import llm
 import tools
-from tools import CONFIG
+from tools import CONFIG, sts
+
+
+def decide(game: tools.Game, last: str, seed: int, step: int) -> tuple[dict, tools.Action]:
+    """Ask MCTS about the current fight decision; returns its record and the action to play."""
+    prompt = llm.build_prompt(last, game)
+    actions = tools.legal_actions(game)
+    advice = tools.mcts_advice(game, CONFIG["mcts"]["simulations"])
+    best = advice[0][0]
+    visits, values = [0] * len(actions), [0.0] * len(actions)
+    if isinstance(best, int):   # multi-card screens return [] and have no per-action scores
+        for a, v, m in advice:
+            visits[a], values[a] = v, round(m, 2)
+    return {"seed": seed, "step": step, "prompt": prompt, "actions": actions, "best": best,
+            "visits": visits, "values": values, "forced": len(actions) == 1}, best
 
 
 def play_one(seed: int) -> list[dict]:
-    """One game with MCTS choosing every action; returns its records."""
+    """One fight with MCTS choosing every action; returns its records."""
     fight = CONFIG["fight"]
-    sims = CONFIG["mcts"]["simulations"]
     game = tools.new_battle(fight["encounter"], seed, fight["ascension"])
     records, last = [], "nothing yet"
     while game.outcome == "UNDECIDED":
-        prompt = llm.build_prompt(last, game)
-        actions = tools.legal_actions(game)
-        advice = tools.mcts_advice(game, sims)
-        best = advice[0][0]
-        visits, values = [0] * len(actions), [0.0] * len(actions)
-        if isinstance(best, int):   # multi-card screens return [] and have no per-action scores
-            for a, v, m in advice:
-                visits[a], values[a] = v, round(m, 2)
-        records.append({"seed": seed, "step": len(records), "prompt": prompt, "actions": actions,
-                        "best": best, "visits": visits, "values": values, "forced": len(actions) == 1})
+        record, best = decide(game, last, seed, len(records))
+        records.append(record)
         last = tools.act(game, best)
     hp = game.bc.state()["player"]["hp"]
     for r in records:
@@ -57,9 +68,30 @@ def play_one(seed: int) -> list[dict]:
     return records
 
 
+def play_act1(rule_seed: int) -> list[dict]:
+    """Act 1 of run collect.run_seed: MCTS in fights, rules (seeded by rule_seed) outside them."""
+    rng = random.Random(rule_seed)
+    game = tools.new_game(CONFIG["collect"]["run_seed"], CONFIG["fight"]["ascension"])
+    records, last = [], "nothing yet"
+    while game.outcome == "UNDECIDED" and sts.game_state(game.gc)["act"] == 1:
+        if game.bc is None:
+            last = tools.act(game, tools.rule_action(game, rng))
+            continue
+        record, best = decide(game, last, rule_seed, len(records))
+        records.append(record)
+        last = tools.act(game, best)
+    s = sts.game_state(game.gc)
+    for r in records:
+        r["game_outcome"] = "ACT1_CLEARED" if s["act"] > 1 else game.outcome
+        r["game_hp"], r["game_floor"] = s["hp"], s["floor"]
+    return records
+
+
 def main():
     cfg, fight = CONFIG["collect"], CONFIG["fight"]
-    out = tools.ROOT / cfg["out_dir"] / fight["encounter"].lower()
+    act1 = cfg.get("mode", "fight") == "act1"
+    play, name = (play_act1, f"act1_seed{cfg['run_seed']}") if act1 else (play_one, fight["encounter"].lower())
+    out = tools.ROOT / cfg["out_dir"] / name
     out.mkdir(parents=True, exist_ok=True)
     seeds = list(range(cfg["seed_start"], cfg["seed_start"] + cfg["games"]))
     total = sum(cfg["split"])
@@ -69,12 +101,13 @@ def main():
               "test": seeds[n_train + n_val:]}
 
     started = time.time()
-    meta = {"encounter": fight["encounter"], "ascension": fight["ascension"],
+    meta = {"encounter": "act 1 of run seed %d, rules outside fights" % cfg["run_seed"] if act1 else fight["encounter"],
+            "ascension": fight["ascension"],
             "mcts_simulations": CONFIG["mcts"]["simulations"], "system_prompt": llm.SYSTEM_PROMPT, "splits": {}}
     train_prompts: set[str] = set()
     with multiprocessing.Pool(os.cpu_count()) as pool:
         for name, split_seeds in splits.items():   # train first, so val/test can be checked against it
-            games = pool.map(play_one, split_seeds, chunksize=20)
+            games = pool.map(play, split_seeds, chunksize=1 if act1 else 20)
             records = [r for g in games for r in g]
             if name == "train":
                 train_prompts = {r["prompt"] for r in records}
@@ -84,7 +117,7 @@ def main():
             with open(out / f"{name}.jsonl", "w", encoding="utf-8") as f:
                 for r in records:
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            wins = sum(g[0]["game_outcome"] == "PLAYER_VICTORY" for g in games)
+            wins = sum(g[0]["game_outcome"] in ("PLAYER_VICTORY", "ACT1_CLEARED") for g in games)
             stats = meta["splits"][name] = {
                 "seeds": [split_seeds[0], split_seeds[-1]], "games": len(games), "records": len(records),
                 "forced": sum(r["forced"] for r in records),

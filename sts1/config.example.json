@@ -34,7 +34,9 @@
     "max_steps": 3000
   },
   "collect": {
-    "_comment": "collect.py: MCTS plays `games` fights of fight.encounter from seed_start; split train:val:test by seed (never by step)",
+    "_comment": "collect.py: mode \"fight\" = MCTS plays `games` fights of fight.encounter from seed_start; mode \"act1\" = act 1 of run run_seed, `games` times with rule seeds from seed_start (MCTS in fights, sts_lightspeed's rules outside). Split train:val:test by seed (never by step)",
+    "mode": "fight",
+    "run_seed": 0,
     "games": 10000,
     "seed_start": 1,
     "split": [

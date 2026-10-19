@@ -12,8 +12,8 @@
 using namespace sts;
 
 void search::ScumSearchAgent2::takeAction(GameContext &gc, search::GameAction a) {
+    gameActionHistory.emplace_back(a.bits);   // always: the rule_action binding reads it
     if (printActions) {
-        gameActionHistory.emplace_back(a.bits);
         std::cout << std::hex << a.bits << std::endl;
     }
     a.execute(gc);
@@ -334,6 +334,7 @@ void search::ScumSearchAgent2::weightedCardRewardPolicy(GameContext &gc) {
                 acc += weights[i].second;
                 if (roll <= acc) {
                     selection = weights[i].first;
+                    break;   // upstream had no break, so the last card always won
                 }
             }
         }
