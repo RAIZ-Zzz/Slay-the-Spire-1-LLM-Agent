@@ -22,10 +22,13 @@ import urllib.request
 # torch has to be imported before the simulator module: on TC2, importing torch after
 # slaythespire segfaults inside torch's import, the other order works (tested 10-19).
 # ponytail: import-order workaround; the real fix is in how the .so links libstdc++.
-try:
-    import torch  # noqa: F401
-except ImportError:   # API or random mode on a machine without torch
-    pass
+# Only when run as a script: collect.py imports this module and then forks workers,
+# and on TC2 the forked workers hang (0% CPU) if torch is already loaded (10-20).
+if __name__ == "__main__":
+    try:
+        import torch  # noqa: F401
+    except ImportError:   # API or random mode on a machine without torch
+        pass
 
 import tools
 from tools import CONFIG
