@@ -2,7 +2,7 @@
 # The seed-0 act-1 experiment on TC2 in one command, from the repo root:
 #   git pull && bash sts1/act1_seed0.sh           # build, config, collect + check, format check, queue jobs
 #   bash sts1/act1_seed0.sh results               # print the results of the queued jobs
-# Jobs: train, then (after it succeeds) the accuracy evaluation and act-1 play.
+# Jobs: train, then (after it succeeds) one job with the accuracy evaluation and act-1 play.
 set -e
 cd "$(dirname "$0")/.."
 PY=~/.conda/envs/gpu-env/bin/python
@@ -12,18 +12,24 @@ mkdir -p runs
 
 if [ "$1" = results ]; then
   [ -f "$JOBS_FILE" ] || { echo "no jobs queued yet: run  bash sts1/act1_seed0.sh  first"; exit 1; }
-  read -r TRAIN EVAL PLAY < "$JOBS_FILE"
-  squeue -u "$USER" -h -o "%i %T" | grep -E "^($TRAIN|$EVAL|$PLAY) " && echo "(still queued or running)" || true
+  read -r TRAIN AFTER < "$JOBS_FILE"
+  squeue -u "$USER" -h -o "%i %T" | grep -E "^($TRAIN|$AFTER) " && echo "(still queued or running)" || true
   echo "== train ($TRAIN)"
   grep -o "{'loss'[^}]*}" "runs/sts1-sft-$TRAIN.out" | sed -n '1p;$p' || true
   grep -o "{'eval_loss'[^}]*}\|{'train_runtime'[^}]*}" "runs/sts1-sft-$TRAIN.out" || true
   grep -m3 -E "Error|Traceback" "runs/sts1-sft-$TRAIN.out" || true
-  echo "== accuracy on val ($EVAL)"
-  tail -5 "runs/sts1-sft-$EVAL.out" 2>/dev/null || echo "no log yet"
-  echo "== act 1 play ($PLAY), teacher MCTS+rules won 7/20 (rule seeds 5 6 8 11 | 16 17 19)"
-  grep -E "^seed|^summary" "runs/sts1-sft-$PLAY.out" 2>/dev/null || echo "no log yet"
+  LOG="runs/sts1-sft-$AFTER.out"
+  [ -f "$LOG" ] || { echo "== eval + play ($AFTER): no log yet"; exit 0; }
+  echo "== accuracy on val ($AFTER)"
+  grep -E "^(group|all|not forced)" "$LOG" || true
+  echo "== act 1 play ($AFTER), teacher MCTS+rules won 7/20 (rule seeds 5 6 8 11 | 16 17 19)"
+  grep -E "^seed|^summary" "$LOG" || true
+  grep -m3 -E "Error|Traceback|Fatal" "$LOG" || true
   exit 0
 fi
+
+# QoS: at most 2 submitted jobs per user (queued + running), so eval and play share one job
+squeue -u "$USER" -h | grep -q . && { echo "STOP: you already have jobs in the queue (squeue -u $USER), need 2 free slots"; exit 1; }
 
 echo "== build"
 PY=$PY JOBS=16 ./build.sh > runs/build.log 2>&1 || { tail -20 runs/build.log; exit 1; }
@@ -51,8 +57,7 @@ echo "== format check"
 $PY sts1/sft.py show | tail -4
 
 TRAIN=$(sbatch --parsable sts1/sft.sbatch)
-EVAL=$(sbatch --parsable --dependency=afterok:$TRAIN sts1/sft.sbatch eval runs/sft-act1_seed0/final 0)
-PLAY=$(sbatch --parsable --dependency=afterok:$TRAIN sts1/sft.sbatch play)
-echo "$TRAIN $EVAL $PLAY" > "$JOBS_FILE"
-echo "== queued: train $TRAIN, then eval $EVAL and play $PLAY"
+AFTER=$(sbatch --parsable --dependency=afterok:$TRAIN sts1/sft.sbatch evalplay runs/sft-act1_seed0/final)
+echo "$TRAIN $AFTER" > "$JOBS_FILE"
+echo "== queued: train $TRAIN, then eval + play $AFTER"
 echo "check later with: bash sts1/act1_seed0.sh results"
