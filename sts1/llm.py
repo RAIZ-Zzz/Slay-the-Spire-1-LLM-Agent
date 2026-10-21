@@ -195,13 +195,14 @@ def main():
     stamp = time.strftime("%Y%m%d-%H%M%S")
     act1 = PLAY["mode"] == "act1"   # seeds below are then rule seeds of run play.run_seed
     print(f"model {LLM['model']} | {PLAY['mode']} | {PLAY['games']} games from seed {fight['seed']}"
-          + (f" (rule seeds of run {PLAY['run_seed']})" if act1 else ""))
+          + ((f" (rule seeds of run {PLAY['run_seed']})" if PLAY.get("run_seed") is not None
+              else " (run s with rule seed s)") if act1 else ""))
     hp_left, wins, invalid = [], 0, 0   # single fights: HP left, 0 unless won (lost, stuck, too long)
     floors, cleared = [], 0             # act1: floor reached, act 1 boss beaten
     for i in range(PLAY["games"]):
         seed = fight["seed"] + i
-        if act1:
-            game = tools.new_game(PLAY["run_seed"], fight["ascension"])
+        if act1:   # run_seed null: run `seed` with rule seed `seed`, as collect.py does
+            game = tools.new_game(seed if PLAY.get("run_seed") is None else PLAY["run_seed"], fight["ascension"])
         elif PLAY["mode"] == "game":
             game = tools.new_game(seed, fight["ascension"])
         else:

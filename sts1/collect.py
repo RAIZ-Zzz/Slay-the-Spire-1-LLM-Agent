@@ -8,6 +8,7 @@ collect.mode "fight": one fight of fight.encounter per seed (seeds seed_start, .
 collect.mode "act1": act 1 of the run collect.run_seed, once per rule seed (seed_start, ...):
 MCTS plays every fight, sts_lightspeed's rules (tools.rule_action) everything else, until
 the act 1 boss is beaten or the run dies. Only fight decisions become records.
+run_seed null: game s is run s with rule seed s, so every game has its own map (act1_<games>runs).
 
     python sts1/collect.py
 
@@ -69,9 +70,11 @@ def play_one(seed: int) -> list[dict]:
 
 
 def play_act1(rule_seed: int) -> list[dict]:
-    """Act 1 of run collect.run_seed: MCTS in fights, rules (seeded by rule_seed) outside them."""
+    """Act 1 of run collect.run_seed (null: of run rule_seed, a new map every game): MCTS in
+    fights, rules (seeded by rule_seed) outside them."""
     rng = random.Random(rule_seed)
-    game = tools.new_game(CONFIG["collect"]["run_seed"], CONFIG["fight"]["ascension"])
+    run_seed = CONFIG["collect"]["run_seed"]
+    game = tools.new_game(rule_seed if run_seed is None else run_seed, CONFIG["fight"]["ascension"])
     records, last = [], "nothing yet"
     while game.outcome == "UNDECIDED" and sts.game_state(game.gc)["act"] == 1:
         if game.bc is None:
@@ -90,7 +93,8 @@ def play_act1(rule_seed: int) -> list[dict]:
 def main():
     cfg, fight = CONFIG["collect"], CONFIG["fight"]
     act1 = cfg.get("mode", "fight") == "act1"
-    play, name = (play_act1, f"act1_seed{cfg['run_seed']}") if act1 else (play_one, fight["encounter"].lower())
+    play, name = ((play_act1, f"act1_seed{cfg['run_seed']}" if cfg["run_seed"] is not None else f"act1_{cfg['games']}runs")
+                  if act1 else (play_one, fight["encounter"].lower()))
     out = tools.ROOT / cfg["out_dir"] / name
     out.mkdir(parents=True, exist_ok=True)
     seeds = list(range(cfg["seed_start"], cfg["seed_start"] + cfg["games"]))
@@ -101,7 +105,7 @@ def main():
               "test": seeds[n_train + n_val:]}
 
     started = time.time()
-    meta = {"encounter": "act 1 of run seed %d, rules outside fights" % cfg["run_seed"] if act1 else fight["encounter"],
+    meta = {"encounter": f"act 1 of {name}, rules outside fights" if act1 else fight["encounter"],
             "ascension": fight["ascension"],
             "mcts_simulations": CONFIG["mcts"]["simulations"], "system_prompt": llm.SYSTEM_PROMPT, "splits": {}}
     train_prompts: set[str] = set()

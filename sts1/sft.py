@@ -6,8 +6,10 @@ simulator and config.json, which training does not.
     HF_HUB_OFFLINE=1 python sts1/sft.py show     # print one formatted example + token count
     HF_HUB_OFFLINE=1 python sts1/sft.py train    # fine-tune, checkpoints in OUTPUT_DIR
     HF_HUB_OFFLINE=1 python sts1/sft.py eval [ADAPTER_DIR|none] [N] [MAX_NEW_TOKENS]
-                                                 # action accuracy on the first N validation
+                                                 # action accuracy on N random validation
                                                  # records (all if N is 0 or missing); "none" = no LoRA;
+                                                 # eval-train: the same on train (did it fit? Karpathy's
+                                                 # "Recipe", stage Overfit);
                                                  # MAX_NEW_TOKENS default 16, use 512 (llm.py's
                                                  # max_tokens) for the untrained model, which reasons first
 
@@ -28,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent   # the folder that holds sts1/, s
 # --- settings ------------------------------------------------------------------
 
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"   # user's choice, 10-18; already in the TC2 HF cache
-DATA = "act1_seed0"   # data/<DATA>/ from collect.py; was "jaw_worm" (that adapter is in runs/sft)
+DATA = "act1_1000runs"   # data/<DATA>/ from collect.py; before: "jaw_worm" (adapter in runs/sft), "act1_seed0"
 DATA_DIR = ROOT / "data" / DATA                # train.jsonl / val.jsonl / test.jsonl
 OUTPUT_DIR = ROOT / "runs" / f"sft-{DATA}"
 
@@ -77,7 +79,7 @@ def to_prompt_completion(record: dict) -> dict:
 #   game_outcome, game_hp - how that fight ended
 #   in_train       - val/test only: the same prompt also occurs in train
 OLD_COLUMNS = ["seed", "step", "prompt", "actions", "best", "visits", "values", "forced",
-               "game_outcome", "game_hp", "in_train"]
+               "game_outcome", "game_hp", "game_floor", "in_train"]
 
 
 def build_dataset():
@@ -118,6 +120,10 @@ EVAL_STEPS = 500   # no source: validation loss every 500 updates, about 6 times
 
 
 def train(dataset) -> None:
+    # A finished run must not be "resumed": its last checkpoint makes a rerun end after 0 steps
+    # (job 44648, 10-21). Delete OUTPUT_DIR to train again.
+    if (OUTPUT_DIR / "final").exists():
+        raise SystemExit(f"{OUTPUT_DIR / 'final'} exists: already trained; delete {OUTPUT_DIR} to retrain")
     import torch
     from peft import LoraConfig
     from trl import SFTConfig, SFTTrainer
@@ -138,6 +144,9 @@ def train(dataset) -> None:
         max_length=MAX_LENGTH,             # checked by `show`: longest example is 476 tokens
         model_init_kwargs={"dtype": torch.bfloat16},   # TRL SFTTrainer docs: otherwise loads in float32
         eval_strategy="steps", eval_steps=EVAL_STEPS,  # HF LLM Course ch. 11: watch validation loss
+        # TrainingArguments default logging_steps=500 logged nothing in the 84-step act1_seed0 run.
+        # 10 has no source, it only has to be much smaller than the number of steps.
+        logging_steps=10, logging_first_step=True,
     )
     trainer = SFTTrainer(
         model=MODEL_NAME,
@@ -187,7 +196,8 @@ def summarize(rows: list[dict]) -> None:
             print(f"{name:34s} {n:6d} {model:7.1%} {zero:9.1%} {invalid:10d}")
 
 
-def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, batch_size: int = 32) -> None:
+def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, batch_size: int = 32,
+             split: str = "validation") -> None:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -198,10 +208,10 @@ def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, b
         model = PeftModel.from_pretrained(model, adapter)
     model.eval()
 
-    records = load_splits()["validation"]   # raw records: still have best / forced / in_train
-    if limit:
-        records = records.select(range(min(limit, len(records))))
-    print(f"model {MODEL_NAME} + {adapter or 'no adapter'} | {len(records)} validation records")
+    records = load_splits()[split]   # raw records: still have best / forced (/ in_train outside train)
+    if limit:   # a random sample, not the first games only
+        records = records.shuffle(seed=0).select(range(min(limit, len(records))))
+    print(f"model {MODEL_NAME} + {adapter or 'no adapter'} | {len(records)} {split} records")
 
     rows, started = [], time.time()
     for start in range(0, len(records), batch_size):
@@ -215,7 +225,7 @@ def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, b
         replies = tokenizer.batch_decode(output[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         for record, reply in zip(batch, replies):
             rows.append({"best": record["best"], "answer": parse_answer(reply), "reply": reply,
-                         "forced": record["forced"], "in_train": record["in_train"]})
+                         "forced": record["forced"], "in_train": record.get("in_train", True)})
         if start == 0:
             for row in rows[:3]:
                 print(f"  reply {row['reply']!r} -> {row['answer']} | MCTS {row['best']}")
@@ -227,13 +237,14 @@ def evaluate(adapter: str | None, limit: int | None, max_new_tokens: int = 16, b
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "show"
-    if command not in ("show", "train", "eval"):
-        raise SystemExit(f"unknown command {command!r}: use show, train or eval")
-    if command == "eval":
+    if command not in ("show", "train", "eval", "eval-train"):
+        raise SystemExit(f"unknown command {command!r}: use show, train, eval or eval-train")
+    if command in ("eval", "eval-train"):
         adapter = sys.argv[2] if len(sys.argv) > 2 else str(OUTPUT_DIR / "final")
         limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
         max_new_tokens = int(sys.argv[4]) if len(sys.argv) > 4 else 16
-        evaluate(None if adapter == "none" else adapter, limit, max_new_tokens)
+        evaluate(None if adapter == "none" else adapter, limit or None, max_new_tokens,
+                 split="train" if command == "eval-train" else "validation")
         return
     dataset = build_dataset()
     if command == "show":
