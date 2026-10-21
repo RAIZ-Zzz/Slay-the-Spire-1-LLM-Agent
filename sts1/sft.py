@@ -43,8 +43,9 @@ SYSTEM_PROMPT = (
     "ask for a list of hand numbers, end with 'ANSWER: [0, 2]', or 'ANSWER: []' for none."
 )
 
-# SFTConfig default; longer sequences lose their end, i.e. the answer (TRL SFTTrainer docs, max_length)
-MAX_LENGTH = 1024
+# Longer sequences lose their end, i.e. the answer (TRL SFTTrainer docs, max_length). The SFTConfig
+# default 1024 cut 26 of act1_1000runs' 127,584 examples (longest 1447 tokens: big late-act-1 decks).
+MAX_LENGTH = 1536
 
 
 # --- data ----------------------------------------------------------------------
@@ -141,7 +142,7 @@ def train(dataset) -> None:
         num_train_epochs=1,                # PEFT Integration "SFT with LoRA" command-line example
         per_device_train_batch_size=2,     # same example
         gradient_accumulation_steps=8,     # same example: 2 x 8 = 16 examples per update
-        max_length=MAX_LENGTH,             # checked by `show`: longest example is 476 tokens
+        max_length=MAX_LENGTH,             # checked by `show` (act1.sh stops if any example is longer)
         model_init_kwargs={"dtype": torch.bfloat16},   # TRL SFTTrainer docs: otherwise loads in float32
         eval_strategy="steps", eval_steps=EVAL_STEPS,  # HF LLM Course ch. 11: watch validation loss
         # TrainingArguments default logging_steps=500 logged nothing in the 84-step act1_seed0 run.
